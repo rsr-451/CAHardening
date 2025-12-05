@@ -1,0 +1,118 @@
+🔒 NTLM Status Check and Blockage for Offline Root CA
+This document provides PowerShell script to check the status of NTLM authentication and implement a complete block for an Offline Root Certificate Authority (CA).
+
+Rationale: An Offline Root CA must only use the most secure authentication methods (e.g., Kerberos) and should ideally have all less-secure protocols, like NTLM, disabled to minimize the attack surface. NTLM is older and vulnerable to various relay and brute-force attacks.
+
+🛠️ Step 1: Check Current NTLM Status
+Use the following PowerShell command to query the Network Security: Restrict NTLM: Incoming NTLM Traffic policy in the local machine's security configuration.
+
+This policy is stored in the System's Local Security Authority (LSA) policy key.
+
+PowerShell Command to Validate Status
+Run this command in an elevated (Administrator) PowerShell session:
+
+PowerShell
+-------------------------------------------------------------------------------------------------------------------------------
+# Path to the security policy database key for incoming NTLM traffic
+$RegPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+$ValueName = 'RestrictReceivingNTLMTraffic'
+
+Write-Host "--- Current NTLM Incoming Traffic Status ---"
+
+if (Test-Path $RegPath) {
+    $CurrentValue = (Get-ItemProperty -Path $RegPath -Name $ValueName -ErrorAction SilentlyContinue).$ValueName
+
+    switch ($CurrentValue) {
+        0 { Write-Host "Current Status: 0 (Allow all NTLM traffic). ❌ HIGH SECURITY RISK" }
+        1 { Write-Host "Current Status: 1 (Deny all domain accounts). ⚠️ MODERATE SECURITY RISK" }
+        2 { Write-Host "Current Status: 2 (Deny all accounts). ✅ SECURE (Desired state)" }
+        default { Write-Host "Current Status: $CurrentValue (Unknown or Unconfigured). Assuming default (0) if key is present." }
+    }
+} else {
+    Write-Host "⚠️ Registry path not found. Policy may be unconfigured or using system defaults."
+    # If the key is absent, the default is usually 0 (Allow all)
+}
+-------------------------------------------------------------------------------------------------------------------------------
+🛑 Step 2: Implement Complete NTLM Blockage
+To completely disable NTLM incoming traffic, we must set the RestrictReceivingNTLMTraffic key to 2 (Deny all accounts).
+
+Additionally, to prevent the Offline Root CA from attempting to send NTLM traffic, we set the RestrictSendingNTLMTraffic key to 2 (Deny all).
+
+PowerShell Script to Disable NTLM
+Run this script in an elevated (Administrator) PowerShell session:
+PowerShell
+-------------------------------------------------------------------------------------------------------------------------------
+# --- Define Registry Path and Secure Value ---
+$LsaPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+$BlockValue = 2 # Deny all accounts/Deny all
+
+Write-Host "========================================================================="
+Write-Host "--- IMPLEMENTING NTLM BLOCKAGE (Setting both incoming and outgoing to Deny All) ---"
+Write-Host "========================================================================="
+
+# 1. Block Incoming NTLM Traffic
+$IncomingName = 'RestrictReceivingNTLMTraffic'
+Write-Host "Configuring Incoming NTLM Traffic (RestrictReceivingNTLMTraffic)..."
+if (-not (Test-Path $LsaPath)) { New-Item -Path $LsaPath -Force | Out-Null }
+
+Set-ItemProperty -Path $LsaPath -Name $IncomingName -Value $BlockValue -Type DWord -Force
+Write-Host "  ✅ Incoming NTLM set to $BlockValue (Deny all accounts)."
+
+# 2. Block Outgoing NTLM Traffic (Prevents the Root CA from initiating NTLM)
+$OutgoingName = 'RestrictSendingNTLMTraffic'
+Write-Host "Configuring Outgoing NTLM Traffic (RestrictSendingNTLMTraffic)..."
+
+Set-ItemProperty -Path $LsaPath -Name $OutgoingName -Value $BlockValue -Type DWord -Force
+Write-Host "  ✅ Outgoing NTLM set to $BlockValue (Deny all)."
+
+Write-Host "`n*** NTLM BLOCKAGE APPLIED ***"
+Write-Host "⚠️ A **REBOOT** is required for these NTLM security policy changes to take full effect."
+-------------------------------------------------------------------------------------------------------------------------------
+
+✅ Step 3: Final Validation
+After running the script and rebooting the Offline Root CA, run the following combined validation command to ensure both the incoming and outgoing policies are correctly set to the secure value of 2.
+
+PowerShell Command to Validate Blockage
+Run this command in an elevated (Administrator) PowerShell session:
+
+PowerShell
+-------------------------------------------------------------------------------------------------------------------------------
+$LsaPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+$DesiredValue = 2
+$Result = @{}
+
+Write-Host "--- Final NTLM Blockage Validation ---"
+
+# Check Incoming Traffic
+$IncomingName = 'RestrictReceivingNTLMTraffic'
+$IncomingValue = (Get-ItemProperty -Path $LsaPath -Name $IncomingName -ErrorAction SilentlyContinue).$IncomingName
+$Result[$IncomingName] = @{Value=$IncomingValue; Status=($IncomingValue -eq $DesiredValue)}
+
+# Check Outgoing Traffic
+$OutgoingName = 'RestrictSendingNTLMTraffic'
+$OutgoingValue = (Get-ItemProperty -Path $LsaPath -Name $OutgoingName -ErrorAction SilentlyContinue).$OutgoingName
+$Result[$OutgoingName] = @{Value=$OutgoingValue; Status=($OutgoingValue -eq $DesiredValue)}
+
+# Display Results
+$TotalSecure = 0
+foreach ($Key in $Result.Keys) {
+    $Status = if ($Result[$Key].Status) {
+        "✅ SECURE"
+        $TotalSecure++
+    } else {
+        "❌ INSECURE"
+    }
+    Write-Host "`nPolicy: $Key"
+    Write-Host "  Current Value: $($Result[$Key].Value)"
+    Write-Host "  Desired Value: $DesiredValue (Deny All)"
+    Write-Host "  Status: $Status"
+}
+
+Write-Host "`n*** Validation Summary ***"
+if ($TotalSecure -eq 2) {
+    Write-Host "🎉 **ALL NTLM POLICIES ARE SECURELY SET (2/2).** NTLM is completely blocked."
+} else {
+    Write-Host "⚠️ **$TotalSecure/2 policies are secure.** Review the items marked INSECURE."
+}
+-------------------------------------------------------------------------------------------------------------------------------
+END
