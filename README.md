@@ -3,3 +3,4 @@ This document details the three critical Windows Registry settings used to compl
 
 Run the following script in an elevated (Administrator) PowerShell session on the CA VM. A reboot is highly recommended after the script completes the configuration steps for the changes to fully take effect.
 
+NTLM status can be validated and disabled using the corresponding script in Offline Root CA.
