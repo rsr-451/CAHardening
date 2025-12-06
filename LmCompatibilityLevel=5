@@ -1,0 +1,66 @@
+*** Offline Root CA VM Hardening and Authentication Resolution Log ***
+
+Date: December 6, 2025
+Objective:
+To configure the Root CA VM to enforce NTLMv2-only authentication for network services, including RDP, by setting LmCompatibilityLevel = 5. The goal was to eliminate weak protocols (LM/NTLMv1) while maintaining RDP functionality from both domain-joined and standalone clients.
+
+---
+
+*** Root Cause Analysis of RDP Lockout ***
+
+The initial lockout error (NTLM authentication being blocked) was caused by a conflict between multiple security policies:
+
+1.  Strict NTLM Block: The 'Restrict NTLM: Incoming/Outgoing NTLM traffic' policies were set to the highest security level (Value 2), blocking all NTLM (including NTLMv2).
+2.  CredSSP Conflict: Client-side conflicts in the 'Encryption Oracle Remediation' policy disrupted the NTLMv2/NLA negotiation handshake.
+
+---
+
+*** Phase 1: Policy Reversal for Access (Via Console) ***
+
+Access was gained via console (KVM/Hypervisor) to revert the absolute NTLM block.
+
+Action 1: Confirming Absolute Block Status (Via Console)
+The following commands confirmed that the NTLM restriction policies were set to 2 (Deny All):
+
+    Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0" -Name "RestrictReceivingNTLMTraffic"
+    Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0" -Name "RestrictSendingNTLMTraffic"
+
+Action 2: Reverting to Operational NTLM Status (Via Console)
+These commands were executed to allow NTLM to run again (Value 1), enabling RDP access:
+
+    # 1. Allow Incoming NTLM Traffic (Value 1)
+    Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0" -Name "RestrictReceivingNTLMTraffic" -Value 1 -Type DWORD -Force
+
+    # 2. Allow Outgoing NTLM Traffic (Value 1)
+    Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\MSV1_0" -Name "RestrictSendingNTLMTraffic" -Value 1 -Type DWORD -Force
+
+    gpupdate /force
+
+---
+
+*** Phase 2: Final Secure Configuration ***
+
+The final configuration implements LmCompatibilityLevel = 5, which achieves the necessary security compromise.
+
+Action 3: Implementing Secure NTLM Compatibility (Via Console)
+This command enforces the use of NTLMv2 while blocking the weak LM and NTLMv1 protocols:
+
+    # Enforce LmCompatibilityLevel = 5 (Send NTLMv2 responses only. Refuse LM & NTLM)
+    Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name "LmCompatibilityLevel" -Value 5 -Type DWORD -Force
+
+Action 4: Client-Side CredSSP Resolution
+To resolve the final RDP connection issues, the following action was taken on the client machine:
+
+    Policy: Encryption Oracle Remediation (Group Policy: Computer Configuration\Administrative Templates\System\Credentials Delegation)
+    Setting: Reverted to Not Configured.
+
+---
+
+*** Final Secure and Operational Configuration Summary ***
+
+| Component | Policy Setting | Registry Value | Security Outcome |
+| NTLM Protocol | LmCompatibilityLevel | 5 | Blocks LM and NTLMv1; Enforces NTLMv2. |
+| NTLM Package | Restrict NTLM (Both) | 1 | Allows NTLM package to run, necessary for NTLMv2 RDP. |
+| Client CredSSP | Encryption Oracle Remediation | Not Configured | Prevents CredSSP conflicts that block RDP handshake. |
+
+Result: RDP is fully functional from both domain-joined and standalone clients using the secure NTLMv2 protocol.
